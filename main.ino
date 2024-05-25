@@ -2,27 +2,54 @@
 // include the library code:
 #include <LiquidCrystal.h>
 #include "StateMachineLib.h"
+#include <Keypad.h>
 #include "AsyncTaskLib.h"
 #include "ImperialMarch.h"
 #include <EasyBuzzer.h>
 #include <LiquidMenu.h>
-#include <Keypad.h>
-#include "Util.h"
+#include <DHT.h>
 
 #define ledR 9
 #define ledG 8
 #define ledB 7
 
+#define buttonPin 15
+
+#define rs 12
+#define en 11
+#define d4 5
+#define d5 4
+#define d6 3
+#define d7 2
 
 #define enter 1
 
 #define length 6
 
+#define DHTPIN 10
+#define DHTTYPE DHT11   
+
+#define photocellPin A0
+
+DHT dht(DHTPIN, DHTTYPE);
+
 size_t timer = 10;
 
+// initialize the library by associating any needed LCD interface pin
+// with the arduino pin number it is connected to
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 
-Util util;
+const byte ROWS = 4; // four rows
+const byte COLS = 4; // three columns
+char keys[ROWS][COLS] = {
+    {'1', '2', '3', 'A'},
+    {'4', '5', '6', 'B'},
+    {'7', '8', '9', 'C'},
+    {'*', '0', '#', 'D'}};
+byte rowPins[ROWS] = {22, 24, 26, 28}; // connect to the row pinouts of the keypad
+byte colPins[COLS] = {30, 32, 34, 36}; // connect to the column pinouts of the keypad
 
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS); // create the keypad
 
 AsyncTask TurnOffLed(500, []()
                      { pinMode(ledR, LOW); }); // Turn off the led after 500ms
@@ -51,6 +78,16 @@ int gasLow = 0;
 int newValue = 0;
 byte pos = 0;
 bool isNegative = false;
+
+bool buttonState;
+
+int outputValue = 0;
+
+
+// Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
+float h;
+// Read temperature as Celsius (the default)
+float t;
 
 // These are the char arrays stored in flash
 const char text1[] PROGMEM = "Env Monitoring";
@@ -97,8 +134,7 @@ LiquidLine opt9(0, 0, text9);
 LiquidLine opt10(0, 1, text10);
 LiquidScreen scr5(opt9, opt10);
 
-LiquidMenu menu(util.lcd);
-
+LiquidMenu menu(lcd);
 
 
 // State Alias
@@ -132,6 +168,46 @@ StateMachine stateMachine(6, 12);
 // Stores last user input
 Input input;
 
+AsyncTask BlockSequenceMsg(1000, true, []()
+                   { 
+    timer--;
+    if(timer == 0)
+    {
+        timer = 10;
+        input = Input::TimeOut10;
+        return;
+    }
+    lcd.setCursor(0, 2);
+    lcd.cursor(); 
+    lcd.print("0");     
+    lcd.print(timer); });
+
+AsyncTask updateMonAmbiental(1000,true, []()
+{
+    h = dht.readHumidity();
+    t = dht.readTemperature();
+
+    lcd.setCursor(4,0);
+    lcd.cursor();
+    lcd.print("    ");
+    lcd.setCursor(4,0);
+    lcd.cursor();
+    lcd.print((int)h);
+    
+    lcd.setCursor(12,0);
+    lcd.cursor();
+    lcd.print("    ");
+    lcd.setCursor(12,0);
+    lcd.cursor();
+    lcd.print((int)t);
+    
+    lcd.setCursor(4,1);
+    lcd.cursor();
+    lcd.print("    ");
+    lcd.setCursor(4,1);
+    lcd.cursor();
+    lcd.print(analogRead(photocellPin) / 4);
+});
 // Setup the State Machine
 void setupStateMachine()
 {
@@ -177,7 +253,8 @@ void setupStateMachine()
     stateMachine.SetOnLeaving(S_INICIO, []()
                               { Serial.println("Leaving A"); });
     stateMachine.SetOnLeaving(S_BLOQUEADO, []()
-                              { Serial.println("Leaving B"); });
+                              { Serial.println("Leaving B"); 
+                                BlockSequenceMsg.Stop();});
     stateMachine.SetOnLeaving(S_CONFIG, []()
                               { Serial.println("Leaving C"); });
     stateMachine.SetOnLeaving(S_MEVENTOS, []()
@@ -188,28 +265,17 @@ void setupStateMachine()
                               { Serial.println("Leaving F"); });
 }
 
-AsyncTask BlockMsg(1000, true, []()
-                   { 
-    timer--;
-    if(timer == 0)
-    {
-        timer = 10;
-        BlockMsg.Stop();
-        input = Input::TimeOut10;
-        return;
-    }
-    util.lcd.setCursor(0, 2);
-    util.lcd.cursor(); 
-    util.lcd.print("0");     
-    util.lcd.print(timer); });
-
 void setup()
 {
+    lcd.begin(16, 2);
     Serial.begin(9600);
+    dht.begin();
 
     pinMode(ledR, LOW);
     pinMode(ledG, LOW);
     pinMode(ledB, LOW);
+
+    pinMode(buttonPin, INPUT);  // Button pin as an input.
 
     TurnOffLed.Start();
     EasyBuzzer.setPin(14);
@@ -234,7 +300,7 @@ void setup()
     opt9.set_asProgmem(1);
     opt10.set_asProgmem(1);
 
-    opt1.attach_function(enter, func);
+    opt1.attach_function(enter, gotoMonAmbiental);
     opt2.attach_function(enter, resetLimits);
     opt3.attach_function(enter, setTempHigh);
     opt4.attach_function(enter, setTempLow);
@@ -254,10 +320,6 @@ void setup()
 
 }
 
-void func()
-{
-    return;
-}   
 
 void loop()
 {
@@ -269,6 +331,11 @@ void loop()
 
     EasyBuzzer.update();
 
+    if(updateMonAmbiental.IsActive())
+    {
+        updateMonAmbiental.Update();
+    }
+
     if (executeMenu)
     {
         myMenu();
@@ -279,9 +346,9 @@ void loop()
         stopMarch.Update();
     }
 
-    if (BlockMsg.IsActive())
+    if (BlockSequenceMsg.IsActive())
     {
-        BlockMsg.Update();
+        BlockSequenceMsg.Update();
     }
 }
 
@@ -291,8 +358,8 @@ void outputA()
     Serial.println("A   B   C   D   E   F");
     Serial.println("X            ");
     Serial.println();
-    util.lcd.clear();
-    util.lcd.print("Input Password:");
+    lcd.clear();
+    lcd.print("Input Password:");
     while (security())
     {
     }
@@ -328,6 +395,7 @@ void outputE()
     Serial.println("                X   ");
     Serial.println();
     input = Input::Unknown;
+    showMonAmbiental();
 }
 void outputF()
 {
@@ -339,10 +407,10 @@ void outputF()
 
 bool security()
 {
-    // Configuramos util.lcd para cada loop
-    util.lcd.setCursor(charCounter, 2);
-    char key = util.keypad.getKey();
-    util.lcd.cursor();
+    // Configuramos lcd para cada loop
+    lcd.setCursor(charCounter, 2);
+    char key = keypad.getKey();
+    lcd.cursor();
 
     if (!key)
     {
@@ -351,7 +419,7 @@ bool security()
 
     buffer[triesCounter] = key;
     Serial.print(key);
-    util.lcd.print("*");
+    lcd.print("*");
     triesCounter++;
 
     if (triesCounter < length)
@@ -364,8 +432,8 @@ bool security()
 
     if (strcmp(password, buffer) == 0)
     {
-        util.print2lines("Access Granted", "Welcome!", 500);
-        util.lcd.clear();
+        print2lines("Access Granted", "Welcome!", 500);
+        lcd.clear();
         input = Input::CorrectPwd;
         return false;
     }
@@ -374,16 +442,16 @@ bool security()
 
     if (failedAttempts >= 3)
     {
-        util.lcd.clear();
+        lcd.clear();
         input = Input::SystBlock;
         return false;
     }
 
-    util.print2lines("Access Denied", "Try Again", 100);
+    print2lines("Access Denied", "Try Again", 100);
     triesCounter = 0;
     charCounter = 0;
-    util.lcd.clear();
-    util.lcd.print("Input Password:");
+    lcd.clear();
+    lcd.print("Input Password:");
     return true;
 }
 
@@ -394,25 +462,41 @@ void blocking()
 
     EasyBuzzer.singleBeep(120, 10000);
 
-    BlockMsg.Start();
-    util.lcd.clear();
-    util.lcd.print("System Blocked");
-    util.lcd.setCursor(0, 2);
-    util.lcd.cursor();
-    util.lcd.print(timer);
-    util.lcd.setCursor(3, 2);
-    util.lcd.cursor();
-    util.lcd.print("Seconds left");
+    BlockSequenceMsg.Start();
+    lcd.clear();
+    lcd.print("System Blocked");
+    lcd.setCursor(0, 2);
+    lcd.cursor();
+    lcd.print(timer);
+    lcd.setCursor(3, 2);
+    lcd.cursor();
+    lcd.print("Seconds left");
 
     failedAttempts = 0;
     triesCounter = 0;
     charCounter = 0;
 }
 
+void print2lines(const char *line1, const char *line2, const int waitTime)
+{
+    lcd.clear();
+    lcd.print(line1);
+    lcd.setCursor(0, 2);
+    lcd.cursor();
+    lcd.print(line2);
+    delay(waitTime);
+}
 
 void myMenu()
 {
-    char key = util.keypad.getKey();
+    char key = keypad.getKey();
+    buttonState = digitalRead(buttonPin);
+
+    if (buttonState == HIGH){
+        buttonState = LOW;
+        gotoMonAmbiental();
+        return;
+    } 
 
     if (key == 'B')
     {
@@ -439,14 +523,35 @@ void myMenu()
     }
 }
 
+void printLineValue(const byte spaces, const char *msg, const byte spacesValue, const int value)
+{
+    lcd.clear();
+    lcd.setCursor(spaces, 0);
+    lcd.cursor();
+    lcd.print(msg);
+    lcd.setCursor(spacesValue, 1);
+    lcd.cursor();
+    lcd.print(value);
+}
 
-bool setSensorLimit(const int startNumber, const byte posStart, const int inferiorLimit, const int superiorLimit)
+void clearLine(int line)
+{
+    lcd.setCursor(0, line);
+    lcd.cursor();
+    for (int i = 0; i < 16; i++)
+    {
+        lcd.print(" ");
+    }
+    lcd.setCursor(0, line); // Vuelve a colocar el cursor al inicio de la línea
+}
+
+bool sensorLimitRepeatable(const int startNumber, const byte posStart, const int inferiorLimit, const int superiorLimit)
 {
     byte digit = 0;
-    
-    char key = util.keypad.getKey();
 
-    if(!key)
+    char key = keypad.getKey();
+
+    if (!key)
     {
         return true;
     }
@@ -459,20 +564,20 @@ bool setSensorLimit(const int startNumber, const byte posStart, const int inferi
 
     if (key == '0')
     {
-        util.lcd.setCursor(pos, 2);
-        util.lcd.cursor();
-        util.lcd.print("0");
+        lcd.setCursor(pos, 2);
+        lcd.cursor();
+        lcd.print("0");
         return true;
     }
 
     // Check if the key is A(-) and the position is the start position and the number is negative
-    if (key == 'A' && pos == posStart && inferiorLimit <  0)
+    if (key == 'A' && pos == posStart && inferiorLimit < 0)
     {
         isNegative = true;
-        util.clearLine(1);
-        util.lcd.setCursor(pos, 2);
-        util.lcd.cursor();
-        util.lcd.print("-");
+        clearLine(1);
+        lcd.setCursor(pos, 2);
+        lcd.cursor();
+        lcd.print("-");
         pos++;
         return true;
     }
@@ -482,26 +587,26 @@ bool setSensorLimit(const int startNumber, const byte posStart, const int inferi
     {
         digit = key - '0';
 
-        if ( isNegative && (((newValue * -10) + digit) < inferiorLimit))
+        if (isNegative && (((newValue * -10) + digit) < inferiorLimit))
         {
             return true;
         }
 
-        if ( !isNegative && ((newValue * 10) + digit) > superiorLimit)
+        if (!isNegative && ((newValue * 10) + digit) > superiorLimit)
         {
             return true;
         }
 
-        if(pos==posStart)
+        if (pos == posStart)
         {
-            util.clearLine(1);
+            clearLine(1);
         }
 
         newValue = newValue * 10 + digit;
 
-        util.lcd.setCursor(pos, 2);
-        util.lcd.cursor();
-        util.lcd.print(key);
+        lcd.setCursor(pos, 2);
+        lcd.cursor();
+        lcd.print(key);
 
         pos++;
         return true;
@@ -512,9 +617,9 @@ bool setSensorLimit(const int startNumber, const byte posStart, const int inferi
     {
         isNegative = false;
         pos--;
-        util.lcd.setCursor(pos, 2);
-        util.lcd.cursor();
-        util.lcd.print(" ");
+        lcd.setCursor(pos, 2);
+        lcd.cursor();
+        lcd.print(" ");
         return true;
     }
 
@@ -525,14 +630,14 @@ bool setSensorLimit(const int startNumber, const byte posStart, const int inferi
 
         newValue = newValue / 10;
 
-        util.lcd.setCursor(pos, 2);
-        util.lcd.cursor();
-        util.lcd.print(" ");
+        lcd.setCursor(pos, 2);
+        lcd.cursor();
+        lcd.print(" ");
         return true;
     }
 
     // Check if the key is # (Enter) and the position is greater than the start position
-    if (key == '#' && pos > 7)
+    if (key == '#' && ( (!isNegative && pos > posStart) || (isNegative && pos > posStart + 1) ))
     {
         menu.update();
         if (isNegative)
@@ -553,100 +658,113 @@ bool setSensorLimit(const int startNumber, const byte posStart, const int inferi
     return true;
 }
 
+bool setSensorLimit(int &sensorValue, const byte posStart, const int inferiorLimit, const int superiorLimit)
+{
+    if (superiorLimit < inferiorLimit)
+    {
+        return;
+    }
+
+    pos = posStart;
+    newValue = 0;
+    isNegative = false;
+
+    while (sensorLimitRepeatable(sensorValue, posStart, inferiorLimit, superiorLimit))
+    {
+    }
+
+    sensorValue = newValue;
+}
+
 void setTempHigh()
 {
     const byte posStart = 6;
     const byte spaces = 3;
-    util.printLineValue(spaces, "Temp High", posStart, tempHigh);
-    pos = posStart;
-    newValue = 0;
-    isNegative = false;
-    while (setSensorLimit(tempHigh, posStart, tempLow, 80))
-    {
-    }
-    tempHigh = newValue;
+    printLineValue(spaces, "Temp High", posStart, tempHigh);
+    setSensorLimit(tempHigh, posStart, tempLow, 50);
 }
 
 void setTempLow()
 {
-    const byte posStart = 7;
-    const byte spaces = 6;
-    util.printLineValue(spaces, "Temp Low", posStart, tempLow);
-    while (setSensorLimit(tempLow, posStart, -60, tempHigh))
-    {
-    }
+    const byte posStart = 6;
+    const byte spaces = 3;
+    printLineValue(spaces, "Temp Low", posStart, tempLow);
+    setSensorLimit(tempLow, posStart, -50, tempHigh);
 }
 
 void setLightHigh()
 {
     const byte posStart = 6;
-    const byte spaces = 6;
-    util.printLineValue(spaces, "Light High", posStart, lightHigh);
-    while (setSensorLimit(lightHigh, posStart, lightLow, 1000))
-    {
-    }
+    const byte spaces = 3;
+    printLineValue(spaces, "Light High", posStart, lightHigh);
+    setSensorLimit(lightHigh, posStart, lightLow, 1000);
 }
 
 void setLightLow()
 {
     const byte posStart = 6;
-    const byte spaces = 6;
-    util.printLineValue(spaces, "Light Low", posStart, lightLow);
-    while (setSensorLimit(lightLow, posStart, 0, lightHigh))
-    {
-    }
+    const byte spaces = 3;
+    printLineValue(spaces, "Light Low", posStart, lightLow);
+    setSensorLimit(lightLow, posStart, 0, lightHigh);
 }
 
 void setHumHigh()
 {
-    const byte posStart = 7;
-    const byte spaces = 6;
-    util.printLineValue(spaces, "Hum High", posStart, humHigh);
-    while (setSensorLimit(humHigh, posStart, humLow, 100))
-    {
-    }
+    const byte posStart = 6;
+    const byte spaces = 3;
+    printLineValue(spaces, "Hum High", posStart, humHigh);
+    setSensorLimit(humHigh, posStart, humLow, 100);
 }
 
 void setHumLow()
 {
-    const byte posStart = 7;
-    const byte spaces = 6;
-    util.printLineValue(spaces, "Hum Low", posStart, humLow);
-    while (setSensorLimit(humLow, posStart, 0, humHigh))
-    {
-    }
+    const byte posStart = 6;
+    const byte spaces = 3;
+    printLineValue(spaces, "Hum Low", posStart, humLow);
+    setSensorLimit(humLow, posStart, 0, humHigh);
 }
 
 void setGasHigh()
 {
-    const byte posStart = 5;
-    const byte spaces = 6;
-    util.printLineValue(spaces, "Gas High", posStart, gasHigh);
-    while (setSensorLimit(gasHigh, posStart, gasLow, 10000))
-    {
-    }
+    const byte posStart = 6;
+    const byte spaces = 3;
+    printLineValue(spaces, "Gas High", posStart, gasHigh);
+    setSensorLimit(gasHigh, posStart, gasLow, 2000);
 }
 
 void setGasLow()
 {
-    const byte posStart = 5;
-    const byte spaces = 6;
-    util.printLineValue(spaces, "Gas Low", posStart, gasLow);
-    while (setSensorLimit(gasLow, posStart, 0, gasHigh))
-    {
-    }
+    const byte posStart = 6;
+    const byte spaces = 3;
+    printLineValue(spaces, "Gas Low", posStart, gasLow);
+    setSensorLimit(gasLow, posStart, 0, gasHigh);
 }
 
 void resetLimits()
 {
-    tempHigh = 80;
-    tempLow = -60;
-    lightHigh = 1000;
-    lightLow = 0;
+    tempHigh = 28;
+    tempLow = -16;
+    lightHigh = 200;
+    lightLow = 800;
     humHigh = 100;
     humLow = 0;
-    gasHigh = 10000;
+    gasHigh = 1000;
     gasLow = 0;
-    util.print2lines("Limits Reset", "Successfully", 1000);
-    menu.update();
+}   
+
+void gotoMonAmbiental()
+{
+    input = Input::BtnPrs;
+    executeMenu = false;
+}
+
+void showMonAmbiental()
+{
+    lcd.clear();
+    lcd.print(F("TEM:"));
+    lcd.setCursor(8, 0);
+    lcd.print(F("HUM:"));
+    lcd.setCursor(0, 1);
+    lcd.print(F("LUZ:"));
+    updateMonAmbiental.Start();
 }

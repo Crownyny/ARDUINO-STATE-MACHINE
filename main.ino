@@ -30,6 +30,9 @@
 #define DHTTYPE DHT11   
 
 #define photocellPin A0
+#define photocellPinGas A1
+
+#define intervals 9
 
 DHT dht(DHTPIN, DHTTYPE);
 
@@ -51,19 +54,26 @@ byte colPins[COLS] = {30, 32, 34, 36}; // connect to the column pinouts of the k
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS); // create the keypad
 
-AsyncTask TurnOffLed(500, []()
+AsyncTask TurnOffLedR(500, []()
                      { pinMode(ledR, LOW); }); // Turn off the led after 500ms
+
+AsyncTask TurnOffLedB(800, []()
+                    { pinMode(ledB,LOW);});
 
 ImperialMarch march(14, 120); // Pin 11, tempo 120
 AsyncTask stopMarch(10000, []()
                     { march.stop(); }); // Play the Imperial March after 10s
 
-bool executeMenu = false;
+bool executeMenu;
+bool executeAlarm;
+
+bool flgCheckTLAlarm ;
+bool flgCheckGasAlarm ;
 
 const char password[length] = "A1234B";
 char buffer[length];
 int triesCounter = 0;
-int failedAttempts = 3;
+int failedAttempts = 0;
 int charCounter = 0;
 
 int tempHigh = 28;
@@ -88,6 +98,17 @@ int outputValue = 0;
 float h;
 // Read temperature as Celsius (the default)
 float t;
+
+int l;
+
+int g;
+
+float tempBuffer[intervals];
+float lightBuffer[intervals];
+int gasBuffer[intervals];
+
+int tempLightIndex = 0;
+int gasIndex = 0;
 
 // These are the char arrays stored in flash
 const char text1[] PROGMEM = "Env Monitoring";
@@ -184,8 +205,26 @@ AsyncTask BlockSequenceMsg(1000, true, []()
 
 AsyncTask updateMonAmbiental(1000,true, []()
 {
+    timer++;
+
+    if(timer == 5)
+    {
+        input = Input::TimeOut5;
+        return;
+    }
+
+    buttonState = digitalRead(buttonPin);
+
+    if (buttonState == HIGH){
+        buttonState = LOW;
+        input = Input::BtnPrs;
+        return;
+    } 
+
     h = dht.readHumidity();
     t = dht.readTemperature();
+
+    l = analogRead(photocellPin) / 4;
 
     lcd.setCursor(4,0);
     lcd.cursor();
@@ -206,8 +245,100 @@ AsyncTask updateMonAmbiental(1000,true, []()
     lcd.print("    ");
     lcd.setCursor(4,1);
     lcd.cursor();
-    lcd.print(analogRead(photocellPin) / 4);
+    lcd.print(l);
+
+    // Actualizar los buffers
+    tempBuffer[tempLightIndex] = t;
+    lightBuffer[tempLightIndex] = l;
+
+    if(tempLightIndex+1 == intervals)
+    {
+        flgCheckTLAlarm = true;
+    }
+    
+    tempLightIndex = (tempLightIndex + 1) % intervals;
+
+    if(!flgCheckTLAlarm)
+    {
+        return;
+    }
+
+    // Calcular promedios
+    float tempSum = 0;
+    float lightSum = 0;
+
+    for (int i = 0; i < intervals; i++) {
+        tempSum += tempBuffer[i];
+        lightSum += lightBuffer[i];
+    }
+    float tempAvg = tempSum / intervals;
+    float lightAvg = lightSum / intervals;
+
+    if (tempAvg >= tempHigh && lightAvg >= lightHigh) {
+        tempLightIndex = 0;
+        flgCheckTLAlarm = false;
+        input = Input::TempLightHigh;
+        return;
+    }
 });
+
+AsyncTask updateMonEventos(1000, true, []()
+{
+    timer++;
+
+    if(timer == 2)
+    {
+        input = Input::TimeOut2;
+        return;
+    }
+
+    buttonState = digitalRead(buttonPin);
+
+    if (buttonState == HIGH){
+        buttonState = LOW;
+        input = Input::BtnPrs;
+        return;
+    } 
+
+    g = analogRead(photocellPinGas);
+
+    lcd.setCursor(4,0);
+    lcd.cursor();
+    lcd.print("    ");
+    lcd.setCursor(4,0);
+    lcd.cursor();
+    lcd.print(g);
+
+    gasBuffer[gasIndex] = g;
+
+    if(gasIndex+1 == intervals)
+    {
+        flgCheckGasAlarm = true;
+    }
+
+    gasIndex = (gasIndex + 1) % intervals;
+
+    if(!flgCheckGasAlarm)
+    {
+        return;
+    }
+
+    int gasSum = 0;
+
+    for (int i = 0; i < intervals; i++) {
+        gasSum += gasBuffer[i];
+    }
+
+    float gasAvg = gasSum / intervals;
+
+    if (gasAvg >= gasHigh) {
+        flgCheckGasAlarm = false;
+        gasIndex = 0;
+        input = Input::GasHigh;
+        return;
+    }
+});
+
 // Setup the State Machine
 void setupStateMachine()
 {
@@ -235,10 +366,9 @@ void setupStateMachine()
     stateMachine.AddTransition(S_MAMBIENTAL, S_MEVENTOS, []()
                                { return input == TimeOut5; });
     stateMachine.AddTransition(S_MAMBIENTAL, S_ALARMA, []()
-                               { return (input == TempLightHigh); });
+                               { return input == TempLightHigh; });
 
-    stateMachine.AddTransition(S_ALARMA, S_MAMBIENTAL, []()
-                               { return input == TimeOut5; });
+
     stateMachine.AddTransition(S_ALARMA, S_INICIO, []()
                                { return input == BtnPrs; });
 
@@ -258,11 +388,14 @@ void setupStateMachine()
     stateMachine.SetOnLeaving(S_CONFIG, []()
                               { Serial.println("Leaving C"); });
     stateMachine.SetOnLeaving(S_MEVENTOS, []()
-                              { Serial.println("Leaving D"); });
+                              { Serial.println("Leaving D"); 
+                                updateMonEventos.Stop();});
     stateMachine.SetOnLeaving(S_MAMBIENTAL, []()
-                              { Serial.println("Leaving E"); });
+                              { Serial.println("Leaving E"); 
+                                updateMonAmbiental.Stop();});
     stateMachine.SetOnLeaving(S_ALARMA, []()
-                              { Serial.println("Leaving F"); });
+                              { Serial.println("Leaving F"); 
+                                EasyBuzzer.stopBeep();});
 }
 
 void setup()
@@ -277,7 +410,7 @@ void setup()
 
     pinMode(buttonPin, INPUT);  // Button pin as an input.
 
-    TurnOffLed.Start();
+    TurnOffLedR.Start();
     EasyBuzzer.setPin(14);
 
     Serial.println("Starting State Machine...");
@@ -327,7 +460,8 @@ void loop()
     // Update State Machine
     stateMachine.Update();
 
-    TurnOffLed.Update();
+    TurnOffLedR.Update();
+    TurnOffLedB.Update();
 
     EasyBuzzer.update();
 
@@ -336,9 +470,19 @@ void loop()
         updateMonAmbiental.Update();
     }
 
+    if(updateMonEventos.IsActive())
+    {
+        updateMonEventos.Update();
+    }
+
     if (executeMenu)
     {
         myMenu();
+    }
+
+    if (executeAlarm)
+    {
+        turnOnAlarm();
     }
 
     if (stopMarch.IsActive())
@@ -388,6 +532,7 @@ void outputD()
     Serial.println("            X    ");
     Serial.println();
     input = Input::Unknown;
+    showMonEventos();
 }
 void outputE()
 {
@@ -402,7 +547,12 @@ void outputF()
     Serial.println("A   B   C   D   E   F");
     Serial.println("                    X");
     Serial.println();
-    input = Input::Unknown;
+
+    pinMode(ledB, HIGH);
+    TurnOffLedB.Start();
+    executeAlarm=true;
+    EasyBuzzer.beep(15);
+    print2lines("Alarm Activated", "Press Button", 100);
 }
 
 bool security()
@@ -458,7 +608,7 @@ bool security()
 void blocking()
 {
     pinMode(ledR, HIGH); // Enciende el led y lo apgaa despues de 500ms
-    TurnOffLed.Reset();
+    TurnOffLedR.Reset();
 
     EasyBuzzer.singleBeep(120, 10000);
 
@@ -490,6 +640,7 @@ void print2lines(const char *line1, const char *line2, const int waitTime)
 void myMenu()
 {
     char key = keypad.getKey();
+
     buttonState = digitalRead(buttonPin);
 
     if (buttonState == HIGH){
@@ -497,6 +648,7 @@ void myMenu()
         gotoMonAmbiental();
         return;
     } 
+
 
     if (key == 'B')
     {
@@ -766,5 +918,43 @@ void showMonAmbiental()
     lcd.print(F("HUM:"));
     lcd.setCursor(0, 1);
     lcd.print(F("LUZ:"));
+    
+    h = dht.readHumidity();
+    t = dht.readTemperature();
+
+    lcd.setCursor(4,0);
+    lcd.cursor();
+    lcd.print((int)h);
+    
+    lcd.setCursor(12,0);
+    lcd.cursor();
+    lcd.print((int)t);
+    
+    lcd.setCursor(4,1);
+    lcd.cursor();
+    lcd.print(analogRead(photocellPin) / 4);
+
+    timer=0;
     updateMonAmbiental.Start();
+}
+
+void showMonEventos()
+{
+    lcd.clear();
+    lcd.print("Gas:");
+    lcd.print(analogRead(photocellPinGas));
+
+    timer=0;
+    updateMonEventos.Start();
+}
+
+void turnOnAlarm()
+{
+    buttonState = digitalRead(buttonPin);
+
+    if (buttonState == HIGH){
+        buttonState = LOW;
+        input = Input::BtnPrs;
+        executeAlarm = false;
+    } 
 }

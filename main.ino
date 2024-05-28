@@ -7,12 +7,13 @@
 #include <EasyBuzzer.h>
 #include <LiquidMenu.h>
 #include <DHT.h>
+#include <OneButton.h>
 
 #define ledR 9
 #define ledG 8
 #define ledB 7
 
-#define buttonPin 15
+#define buttonPin 13
 
 #define rs 12
 #define en 11
@@ -35,6 +36,15 @@
 
 DHT dht(DHTPIN, DHTTYPE);
 
+
+OneButton btn = OneButton(
+  buttonPin,  // Input pin for the button
+  false,        // Button is active LOW
+  false         // Enable internal pull-up resistor
+);
+
+
+
 size_t timer = 10;
 
 // initialize the library by associating any needed LCD interface pin
@@ -43,7 +53,7 @@ LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 
 const byte ROWS = 4; // four rows
 const byte COLS = 4; // three columns
-char keys[ROWS][COLS] = {
+char keys[ROWS][COLS] = { 
     {'1', '2', '3', 'A'},
     {'4', '5', '6', 'B'},
     {'7', '8', '9', 'C'},
@@ -59,9 +69,7 @@ AsyncTask TurnOffLedR(500, []()
 AsyncTask TurnOffLedB(800, []()
                     { pinMode(ledB,LOW);});
 
-ImperialMarch march(14, 120); // Pin 11, tempo 120
-AsyncTask stopMarch(10000, []()
-                    { march.stop(); }); // Play the Imperial March after 10s
+
 
 bool executeMenu;
 bool executeAlarm;
@@ -75,6 +83,8 @@ int triesCounter = 0;
 int failedAttempts = 0;
 int charCounter = 0;
 
+
+
 int tempHigh = 28;
 int tempLow = -16;
 int lightHigh = 200;
@@ -87,8 +97,6 @@ int gasLow = 0;
 int newValue = 0;
 byte pos = 0;
 bool isNegative = false;
-
-bool buttonState;
 
 int outputValue = 0;
 
@@ -188,6 +196,15 @@ StateMachine stateMachine(6, 12);
 // Stores last user input
 Input input;
 
+static void handleClick() {
+  input = Input::BtnPrs;
+}
+
+
+AsyncTask InactivityError(15000, []()
+                    {input = Input::SystBlock;
+                     Serial.println(input);});
+
 AsyncTask BlockSequenceMsg(1000, true, []()
                    { 
     timer--;
@@ -211,14 +228,6 @@ AsyncTask updateMonAmbiental(1000,true, []()
         input = Input::TimeOut5;
         return;
     }
-
-    buttonState = digitalRead(buttonPin);
-
-    if (buttonState == HIGH){
-        buttonState = LOW;
-        input = Input::BtnPrs;
-        return;
-    } 
 
     h = dht.readHumidity();
     t = dht.readTemperature();
@@ -290,14 +299,6 @@ AsyncTask updateMonEventos(1000, true, []()
         input = Input::TimeOut2;
         return;
     }
-
-    buttonState = digitalRead(buttonPin);
-
-    if (buttonState == HIGH){
-        buttonState = LOW;
-        input = Input::BtnPrs;
-        return;
-    } 
 
     g = analogRead(photocellPinGas);
 
@@ -380,12 +381,14 @@ void setupStateMachine()
     stateMachine.SetOnEntering(S_ALARMA, outputF);
 
     stateMachine.SetOnLeaving(S_INICIO, []()
-                              { Serial.println("Leaving A"); });
+                              { Serial.println("Leaving A"); 
+                                InactivityError.Stop();});
     stateMachine.SetOnLeaving(S_BLOQUEADO, []()
                               { Serial.println("Leaving B"); 
                                 BlockSequenceMsg.Stop();});
     stateMachine.SetOnLeaving(S_CONFIG, []()
-                              { Serial.println("Leaving C"); });
+                              { Serial.println("Leaving C");
+                                  executeMenu = false; });
     stateMachine.SetOnLeaving(S_MEVENTOS, []()
                               { Serial.println("Leaving D"); 
                                 updateMonEventos.Stop();});
@@ -450,6 +453,8 @@ void setup()
     menu.add_screen(scr4);
     menu.add_screen(scr5);
 
+    // Single Click event attachment
+    btn.attachClick(handleClick);
 }
 
 
@@ -474,25 +479,19 @@ void loop()
         updateMonEventos.Update();
     }
 
-    if (executeMenu)
-    {
-        myMenu();
-    }
-
-    if (executeAlarm)
-    {
-        turnOnAlarm();
-    }
-
-    if (stopMarch.IsActive())
-    {
-        stopMarch.Update();
-    }
-
     if (BlockSequenceMsg.IsActive())
     {
         BlockSequenceMsg.Update();
     }
+    btn.tick();
+    if (executeMenu)
+    {
+      myMenu();
+    }
+
+
+
+
 }
 
 // Auxiliar output functions that show the state debug
@@ -503,8 +502,11 @@ void outputA()
     Serial.println();
     lcd.clear();
     lcd.print("Input Password:");
-    while (security())
+    InactivityError.Start();
+
+    while (security() && input != SystBlock)
     {
+      InactivityError.Update();
     }
 }
 
@@ -565,6 +567,8 @@ bool security()
     {
         return true;
     }
+
+    InactivityError.Reset();
 
     buffer[triesCounter] = key;
     Serial.print(key);
@@ -639,14 +643,6 @@ void print2lines(const char *line1, const char *line2, const int waitTime)
 void myMenu()
 {
     char key = keypad.getKey();
-
-    buttonState = digitalRead(buttonPin);
-
-    if (buttonState == HIGH){
-        buttonState = LOW;
-        gotoMonAmbiental();
-        return;
-    } 
 
 
     if (key == 'B')
@@ -906,7 +902,6 @@ void resetLimits()
 void gotoMonAmbiental()
 {
     input = Input::BtnPrs;
-    executeMenu = false;
 }
 
 void showMonAmbiental()
@@ -945,15 +940,4 @@ void showMonEventos()
 
     timer=0;
     updateMonEventos.Start();
-}
-
-void turnOnAlarm()
-{
-    buttonState = digitalRead(buttonPin);
-
-    if (buttonState == HIGH){
-        buttonState = LOW;
-        input = Input::BtnPrs;
-        executeAlarm = false;
-    } 
 }

@@ -9,6 +9,7 @@
 #include <DHT.h>
 #include <OneButton.h>
 
+
 #define ledR 9
 #define ledG 8
 #define ledB 7
@@ -25,6 +26,7 @@
 #define enter 1
 
 #define length 6
+#define maxLength 10
 
 #define DHTPIN 10
 #define DHTTYPE DHT11   
@@ -78,10 +80,10 @@ bool flgCheckTLAlarm ;
 bool flgCheckGasAlarm ;
 
 const char password[length] = "A1234B";
-char buffer[length];
-int triesCounter = 0;
-int failedAttempts = 0;
+char buffer[maxLength];
 int charCounter = 0;
+int failedAttempts = 0;
+int attemptsCounter = 0;
 
 
 
@@ -200,10 +202,34 @@ static void handleClick() {
   input = Input::BtnPrs;
 }
 
+void print2lines(const char *line1, const char *line2, const int waitTime)
+{
+    lcd.clear();
+    lcd.print(line1);
+    lcd.setCursor(0, 2);
+    lcd.cursor();
+    lcd.print(line2);
+    delay(waitTime);
+}
 
-AsyncTask InactivityError(15000, []()
-                    {input = Input::SystBlock;
-                     Serial.println(input);});
+
+AsyncTask InactivityError(10000, true, []()
+                    {
+                      failedAttempts++;
+
+                      if (failedAttempts >= 3)
+                      {
+                          lcd.clear();
+                          input = Input::SystBlock;
+                          return;
+                      }
+
+                        print2lines("Inactivity Error", "Try Again", 500);
+                      charCounter = 0;
+                      attemptsCounter = 0;
+                      lcd.clear();
+                      lcd.print("Input Password:");
+                    });
 
 AsyncTask BlockSequenceMsg(1000, true, []()
                    { 
@@ -385,7 +411,10 @@ void setupStateMachine()
                                 InactivityError.Stop();});
     stateMachine.SetOnLeaving(S_BLOQUEADO, []()
                               { Serial.println("Leaving B"); 
-                                BlockSequenceMsg.Stop();});
+                                BlockSequenceMsg.Stop();
+                                EasyBuzzer.stopBeep();
+                                });
+
     stateMachine.SetOnLeaving(S_CONFIG, []()
                               { Serial.println("Leaving C");
                                   executeMenu = false; });
@@ -455,6 +484,8 @@ void setup()
 
     // Single Click event attachment
     btn.attachClick(handleClick);
+
+    btn.setDebounceMs(5);
 }
 
 
@@ -467,7 +498,6 @@ void loop()
     TurnOffLedR.Update();
     TurnOffLedB.Update();
 
-    EasyBuzzer.update();
 
     if(updateMonAmbiental.IsActive())
     {
@@ -483,7 +513,9 @@ void loop()
     {
         BlockSequenceMsg.Update();
     }
+
     btn.tick();
+
     if (executeMenu)
     {
       myMenu();
@@ -502,11 +534,24 @@ void outputA()
     Serial.println();
     lcd.clear();
     lcd.print("Input Password:");
-    InactivityError.Start();
+
 
     while (security() && input != SystBlock)
     {
-      InactivityError.Update();
+        if(charCounter == 0)
+        {
+            InactivityError.Stop();
+        }
+
+        if(charCounter == 1 && InactivityError.IsActive() == false)
+        {
+          InactivityError.Start();
+        }
+
+        if(InactivityError.IsActive())
+        {
+            InactivityError.Update();
+        }
     }
 }
 
@@ -553,13 +598,14 @@ void outputF()
     TurnOffLedB.Start();
     executeAlarm=true;
     EasyBuzzer.beep(15);
+
     print2lines("Alarm Activated", "Press Button", 100);
 }
 
 bool security()
 {
     // Configuramos lcd para cada loop
-    lcd.setCursor(charCounter, 2);
+    lcd.setCursor(attemptsCounter, 2);
     char key = keypad.getKey();
     lcd.cursor();
 
@@ -570,24 +616,29 @@ bool security()
 
     InactivityError.Reset();
 
-    buffer[triesCounter] = key;
-    Serial.print(key);
-    lcd.print("*");
-    triesCounter++;
 
-    if (triesCounter < length)
+    if (charCounter < maxLength-1 && key != '#')
     {
+        buffer[charCounter] = key;
+        Serial.print(key);
+        lcd.print("*");
         charCounter++;
+        attemptsCounter++;
         return true;
     }
 
-    buffer[triesCounter] = '\0';
+    buffer[charCounter] = '\0';
 
     if (strcmp(password, buffer) == 0)
     {
         print2lines("Access Granted", "Welcome!", 500);
         lcd.clear();
         input = Input::CorrectPwd;
+        
+        for(int i = 0; i < maxLength; i++)
+        {
+            buffer[i] = ' ';
+        }
         return false;
     }
 
@@ -600,9 +651,9 @@ bool security()
         return false;
     }
 
-    print2lines("Access Denied", "Try Again", 100);
-    triesCounter = 0;
+    print2lines("Access Denied", "Try Again", 500);
     charCounter = 0;
+    attemptsCounter = 0;
     lcd.clear();
     lcd.print("Input Password:");
     return true;
@@ -610,12 +661,14 @@ bool security()
 
 void blocking()
 {
-    pinMode(ledR, HIGH); // Enciende el led y lo apgaa despues de 500ms
-    TurnOffLedR.Reset();
+    pinMode(ledR, HIGH); // Enciende el led y lo apaga despues de 500ms
+    TurnOffLedR.Start();
 
     EasyBuzzer.singleBeep(120, 10000);
 
+    timer=10;
     BlockSequenceMsg.Start();
+
     lcd.clear();
     lcd.print("System Blocked");
     lcd.setCursor(0, 2);
@@ -626,19 +679,11 @@ void blocking()
     lcd.print("Seconds left");
 
     failedAttempts = 0;
-    triesCounter = 0;
     charCounter = 0;
+    attemptsCounter = 0;
 }
 
-void print2lines(const char *line1, const char *line2, const int waitTime)
-{
-    lcd.clear();
-    lcd.print(line1);
-    lcd.setCursor(0, 2);
-    lcd.cursor();
-    lcd.print(line2);
-    delay(waitTime);
-}
+
 
 void myMenu()
 {
@@ -704,16 +749,20 @@ bool sensorLimitRepeatable(const int startNumber, const byte posStart, const int
     }
 
     // Check if the key is 0 and the position is the start position
-    if (key == '0' && (pos > posStart || (isNegative && pos > posStart + 1)))
+    if (key == '0' && (pos == posStart || (isNegative && pos == posStart + 1)))
     {
         return true;
     }
 
     if (key == '0')
     {
+        newValue = newValue * 10 + digit;
+
         lcd.setCursor(pos, 2);
         lcd.cursor();
         lcd.print("0");
+
+        pos++;
         return true;
     }
 
@@ -918,15 +967,17 @@ void showMonAmbiental()
 
     lcd.setCursor(4,0);
     lcd.cursor();
-    lcd.print((int)h);
+    lcd.print((int)t);
     
     lcd.setCursor(12,0);
     lcd.cursor();
-    lcd.print((int)t);
+    lcd.print((int)h);
     
     lcd.setCursor(4,1);
     lcd.cursor();
     lcd.print(analogRead(photocellPin) / 4);
+
+    Serial.print(analogRead(photocellPin));
 
     timer=0;
     updateMonAmbiental.Start();

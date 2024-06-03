@@ -1,40 +1,55 @@
+/**
+ * @file main.ino
+ * @brief Este archivo contiene el punto de entrada del programa.
+ * 
+ * Este archivo incluye las definiciones necesarias para la configuración 
+ * y ejecución del programa principal.
+ */
+ /**  @brief section includes Inclusiones.
+ * - @param LiquidCrystal.h: Manejo de pantallas LCD.
+ * - @param StateMachineLib.h: Implementación de la máquina de estados.
+ * - @param Keypad.h: Manejo de teclados matriciales.
+ * - @param AsyncTaskLib.h: Manejo de tareas asíncronas.
+ * - @param EasyBuzzer.h: Control fácil de zumbadores.
+ * - @param LiquidMenu.h: Manejo de menús en pantallas LCD.
+ * - @param DHT.h: Sensores de temperatura y humedad.
+ */
+#include <LiquidCrystal.h> /** Manejo de pantallas LCD */
+#include "StateMachineLib.h"/** Implementación de la máquina de estados */
+#include <Keypad.h>/** Manejo de teclados matriciales */
+#include "AsyncTaskLib.h" /** Manejo de tareas asíncronas */
+#include <EasyBuzzer.h> /** Control fácil de zumbadores */
+#include <LiquidMenu.h> /** Manejo de menús en pantallas LCD */
+#include <DHT.h> /** Sensores de temperatura y humedad */
+#include <OneButton.h>/** Boton de estados*/
 
-// include the library code:
-#include <LiquidCrystal.h>
-#include "StateMachineLib.h"
-#include <Keypad.h>
-#include "AsyncTaskLib.h"
-#include <EasyBuzzer.h>
-#include <LiquidMenu.h>
-#include <DHT.h>
-#include <OneButton.h>
+
+#define ledR 9 /**Blocking*/
+#define ledG 8 /**Adorno*/
+#define ledB 7/**Alarma*/
+
+#define buttonPin 13/**Boton de cambio de estados*/
+
+#define rs 12/**Señal a arduino*/
+#define en 11/**Señal a arduino */
+#define d4 5/**Señal a arduino */
+#define d5 4/**Señal a arduino */
+#define d6 3/**Señal a arduino */
+#define d7 2/**Señal a arduino */
+
+#define enter 1/**Presionar enter */
+
+#define length 6/**Tamaño de la contraseña */
+#define maxLength 10/**Tamaño maximo de la contraseña */
+
+#define DHTPIN 10/**Temperatura*/
+#define DHTTYPE DHT11  /**Humedad */ 
+
+#define photocellPin A0/**Luz*/
+#define photocellPinGas A1/**Gas*/
 
 
-#define ledR 9
-#define ledG 8
-#define ledB 7
-
-#define buttonPin 13
-
-#define rs 12
-#define en 11
-#define d4 5
-#define d5 4
-#define d6 3
-#define d7 2
-
-#define enter 1
-
-#define length 6
-#define maxLength 10
-
-#define DHTPIN 10
-#define DHTTYPE DHT11   
-
-#define photocellPin A0
-#define photocellPinGas A1
-
-#define intervals 9
+#define intervals 9/**Intervalos para la medición del promedio*/
 
 DHT dht(DHTPIN, DHTTYPE);
 
@@ -48,9 +63,17 @@ OneButton btn = OneButton(
 
 
 size_t timer = 10;
-
 // initialize the library by associating any needed LCD interface pin
 // with the arduino pin number it is connected to
+/**
+*@brief Constructor del lcd.
+*@param rs  tierra.
+*@param en  5 voltios.
+*@param d4  señal a arduino.
+*@param d5  señal a arduino.
+*@param d6  señal a arduino.
+*@param d7  señal a arduino.
+ */
 LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 
 const byte ROWS = 4; // four rows
@@ -62,12 +85,22 @@ char keys[ROWS][COLS] = {
     {'*', '0', '#', 'D'}};
 byte rowPins[ROWS] = {22, 24, 26, 28}; // connect to the row pinouts of the keypad
 byte colPins[COLS] = {30, 32, 34, 36}; // connect to the column pinouts of the keypad
-
+/**
+ * @brief Keypad inicialización.
+ * @param makeKeyMap(keys) teclas del teclado.
+ * @param rowPins pines de fila.
+ * @param colPins pines de columna.
+ * @return La suma de a y b.
+ */
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS); // create the keypad
-
+/**
+ * @brief Tarea asincrona apagar el led color rojo.
+ */
 AsyncTask TurnOffLedR(500, []()
                      { pinMode(ledR, LOW); }); // Turn off the led after 500ms
-
+/*!
+ * @brief Tarea asincrona apagar el led color azul.
+ */
 AsyncTask TurnOffLedB(800, []()
                     { pinMode(ledB,LOW);});
 
@@ -132,15 +165,45 @@ const char text9[] PROGMEM = "TH GAS HIGH";
 const char text10[] PROGMEM = "TH GAS LOW";
 
 
+
+/**
+ * @brief Resetear limites de controles ambientales.
+ */
 void resetLimits();
+/**
+ * @brief Dar valor al maximo de temperatura.
+ */
 void setTempHigh();
+/**
+ * @brief Dar valor al minimo de temperatura.
+ */
 void setTempLow();
+/**
+ * @brief Dar valor al maximo de luz.
+ */
 void setLightHigh();
+/**
+ * @brief Dar valor al minimo de luz.
+ */
 void setLightLow();
+/**
+ * @brief Dar valor al maximo de humedad.
+ */
 void setHumHigh();
+/**
+ * @brief Dar valor al minimo de humedad.
+ */
 void setHumLow();
+/**
+ * @brief Dar valor al maximo de gas.
+ */
 void setGasHigh();
+/**
+ * @brief Dar valor al minimo de gas.
+ */
 void setGasLow();
+
+
 
 
 
@@ -168,6 +231,15 @@ LiquidMenu menu(lcd);
 
 
 // State Alias
+/**
+ * @brief Estados de la maquina.
+ * @param S_INICIO estado de sesión.
+ * @param S_BLOQUEADO estado bloqueado.
+ * @param S_CONFIG estado configuración.
+ * @param S_MEVENTOS estado de monitoreo de eventos.
+ * @param S_MAMBIENTAL estado de monitoreo ambiental.
+ * @param S_ALARMA estado de alarma.
+ */
 enum State
 {
     S_INICIO = 0,
@@ -193,15 +265,27 @@ enum Input
 };
 
 // Create new StateMachine
+/**
+ * @brief Estados de la maquina.
+ * @param 6 estados.
+ * @param 12 transiciones.
+ */
 StateMachine stateMachine(6, 12);
 
 // Stores last user input
 Input input;
-
+/**
+ * @brief BlockSquenceMsg es una tarea asincrona que bloquea el mensaje del lcd.
+ */
 static void handleClick() {
   input = Input::BtnPrs;
 }
-
+/**
+ * @brief imprime dos renglones en el lcd.
+ * @param line1 es un caracter de texto en el lcd.
+ * @param line2 es un caracter de texto en el lcd.
+ * @param waitTime el tiempo de delay para que acabe la función.
+ */
 void print2lines(const char *line1, const char *line2, const int waitTime)
 {
     lcd.clear();
@@ -212,7 +296,9 @@ void print2lines(const char *line1, const char *line2, const int waitTime)
     delay(waitTime);
 }
 
-
+/**
+ * @brief InactivityError es una tarea asincrona que dispara el mensaje y la alarma de error despues de los 10 segundos de inactividad.
+ */
 AsyncTask InactivityError(10000, true, []()
                     {
                       failedAttempts++;
@@ -230,7 +316,9 @@ AsyncTask InactivityError(10000, true, []()
                       lcd.clear();
                       lcd.print("Input Password:");
                     });
-
+/**
+ * @brief BlockSequenceMsg es una tarea asincrona que muestra el mensaje de error despues de los 10 segundos de inactividad.
+ */
 AsyncTask BlockSequenceMsg(1000, true, []()
                    { 
     timer--;
@@ -244,7 +332,9 @@ AsyncTask BlockSequenceMsg(1000, true, []()
     lcd.cursor(); 
     lcd.print("0");     
     lcd.print(timer); });
-
+/**
+ * @brief updateMonAmbiental es una tarea asincrona que actualiza los datos del monitoreo cada 5 segundos.
+ */
 AsyncTask updateMonAmbiental(1000,true, []()
 {
     timer++;
@@ -282,7 +372,13 @@ AsyncTask updateMonAmbiental(1000,true, []()
     lcd.print(l);
 
     // Actualizar los buffers
+    /**
+    * @brief Actualizar el buffer de temperatura.
+    */
     tempBuffer[tempLightIndex] = t;
+    /**
+    * @brief Actualizar el buffer de luz.
+    */
     lightBuffer[tempLightIndex] = l;
 
     if(tempLightIndex+1 == intervals)
@@ -315,7 +411,9 @@ AsyncTask updateMonAmbiental(1000,true, []()
         return;
     }
 });
-
+/**
+ * @brief updateMonEventos es una tarea asincrona que actualiza los datos del monitoreo de eventos cada 2 segundos.
+ */
 AsyncTask updateMonEventos(1000, true, []()
 {
     timer++;
@@ -365,6 +463,10 @@ AsyncTask updateMonEventos(1000, true, []()
     }
 });
 
+// Setup the State Machine
+/**
+ * @brief setupStateMachine inicializa los estados y las transiciones de los estados, de la maquina de estados.
+ */
 // Setup the State Machine
 void setupStateMachine()
 {
@@ -527,6 +629,9 @@ void loop()
 }
 
 // Auxiliar output functions that show the state debug
+/**
+ * @brief outputA muestra en el serial el estado A y en el lcd pide la contraseña.
+ */
 void outputA()
 {
     Serial.println("A   B   C   D   E   F");
@@ -554,7 +659,9 @@ void outputA()
         }
     }
 }
-
+/**
+ * @brief outputB muestra en el serial el estado B y bloquea el sistema.
+ */
 void outputB()
 {
     Serial.println("A   B   C   D   E   F");
@@ -563,6 +670,9 @@ void outputB()
     input = Input::Unknown;
     blocking();
 }
+/**
+ * @brief outputC muestra en el serial el estado C y en el lcd muestra el menu principal.
+ */
 void outputC()
 {
     Serial.println("A   B   C   D   E   F");
@@ -572,6 +682,9 @@ void outputC()
     menu.update();
     executeMenu = true;
 }
+/**
+ * @brief outputD muestra en el serial el estado D y en el lcd muestra el monitoreo de eventos.
+ */
 void outputD()
 {
     Serial.println("A   B   C   D   E   F");
@@ -580,6 +693,9 @@ void outputD()
     input = Input::Unknown;
     showMonEventos();
 }
+/**
+ * @brief outputE muestra en el serial el estado E y en el lcd muestra el monitoreo ambiental.
+ */
 void outputE()
 {
     Serial.println("A   B   C   D   E   F");
@@ -588,6 +704,9 @@ void outputE()
     input = Input::Unknown;
     showMonAmbiental();
 }
+/**
+ * @brief outputF muestra en el serial el estado E y tira la alarma.
+ */
 void outputF()
 {
     Serial.println("A   B   C   D   E   F");
@@ -601,7 +720,9 @@ void outputF()
 
     print2lines("Alarm Activated", "Press Button", 100);
 }
-
+/**
+ * @brief security valida que la contraseña sea correcta con 3 intentos para bloquearse .
+ */
 bool security()
 {
     // Configuramos lcd para cada loop
@@ -658,7 +779,9 @@ bool security()
     lcd.print("Input Password:");
     return true;
 }
-
+/**
+ * @brief blocking bloquea el sistema.
+ */
 void blocking()
 {
     pinMode(ledR, HIGH); // Enciende el led y lo apaga despues de 500ms
@@ -684,7 +807,9 @@ void blocking()
 }
 
 
-
+/**
+ * @brief myMenu es el menú de estados.
+ */
 void myMenu()
 {
     char key = keypad.getKey();
@@ -714,7 +839,13 @@ void myMenu()
         return;
     }
 }
-
+/**
+ * @brief printLineValue imprime un valor en una linea en especifico.
+ * @param spaces son los espacios que va a saltar el valor. 
+ * @param msg es el mensaje o valor.
+ * @param spacesValue cuantos spacios tenga el mensaje. 
+ * @param value valor numerico.
+ */
 void printLineValue(const byte spaces, const char *msg, const byte spacesValue, const int value)
 {
     lcd.clear();
@@ -725,7 +856,9 @@ void printLineValue(const byte spaces, const char *msg, const byte spacesValue, 
     lcd.cursor();
     lcd.print(value);
 }
-
+/**
+ * @brief clearLine borra una linea entera del lcd.
+ */
 void clearLine(int line)
 {
     lcd.setCursor(0, line);
@@ -736,7 +869,30 @@ void clearLine(int line)
     }
     lcd.setCursor(0, line); // Vuelve a colocar el cursor al inicio de la línea
 }
-
+/**
+ * @brief Verifica y procesa la entrada de teclado para un sensor con límites y repetición.
+ * 
+ * Esta función permite la entrada de valores numéricos desde un teclado y los procesa
+ * asegurándose de que estén dentro de ciertos límites, y puede repetir los valores si es necesario.
+ * 
+ * @param startNumber El número inicial para el sensor.
+ * @param posStart La posición de inicio en la pantalla LCD para mostrar el valor.
+ * @param inferiorLimit El límite inferior permitido para el valor del sensor.
+ * @param superiorLimit El límite superior permitido para el valor del sensor.
+ * @return true si la entrada fue válida y se debe seguir procesando, false si se debe finalizar la entrada.
+ * 
+ * @details La función interactúa con un teclado numérico y un LCD para permitir la entrada de valores numéricos
+ * dentro de los límites especificados. También maneja la repetición de dígitos y la conversión de números negativos.
+ * Los siguientes botones del teclado se utilizan para las operaciones:
+ * - '0-9': Entrada de dígitos numéricos.
+ * - 'A': Para ingresar números negativos si el límite inferior es menor que cero.
+ * - 'B': Para retroceder y corregir la entrada.
+ * - '#': Para confirmar la entrada y finalizar el proceso.
+ * - '*': Para cancelar la entrada y volver al valor inicial.
+ * 
+ * @note Esta función asume la existencia de un objeto `keypad` que proporciona métodos para obtener la entrada del teclado,
+ * y un objeto `lcd` que se utiliza para la visualización en la pantalla LCD.
+ */
 bool sensorLimitRepeatable(const int startNumber, const byte posStart, const int inferiorLimit, const int superiorLimit)
 {
     byte digit = 0;
@@ -853,7 +1009,27 @@ bool sensorLimitRepeatable(const int startNumber, const byte posStart, const int
 
     return true;
 }
-
+/**
+ * @brief Establece el valor de un sensor dentro de ciertos límites mediante entrada interactiva.
+ * 
+ * Esta función permite establecer el valor de un sensor dentro de ciertos límites especificados
+ * mediante una entrada interactiva desde un teclado. El usuario puede ingresar valores numéricos
+ * y confirmar la selección una vez que esté satisfecho.
+ * 
+ * @param sensorValue Referencia al valor del sensor que se actualizará con el valor seleccionado.
+ * @param posStart La posición de inicio en la pantalla LCD para mostrar el valor seleccionado.
+ * @param inferiorLimit El límite inferior permitido para el valor del sensor.
+ * @param superiorLimit El límite superior permitido para el valor del sensor.
+ * 
+ * @details Esta función se encarga de coordinar la entrada interactiva del usuario y la actualización
+ * del valor del sensor. Utiliza la función `sensorLimitRepeatable` para procesar la entrada del teclado
+ * y asegurarse de que los valores estén dentro de los límites especificados. Una vez que se confirma un valor,
+ * actualiza la referencia `sensorValue` con el nuevo valor seleccionado.
+ * 
+ * @note Esta función asume que la función `sensorLimitRepeatable` está definida y disponible para su uso.
+ * 
+ * @see sensorLimitRepeatable
+ */
 bool setSensorLimit(int &sensorValue, const byte posStart, const int inferiorLimit, const int superiorLimit)
 {
     if (superiorLimit < inferiorLimit)
@@ -871,6 +1047,13 @@ bool setSensorLimit(int &sensorValue, const byte posStart, const int inferiorLim
 
     sensorValue = newValue;
 }
+
+
+
+
+
+//Ya esta comentado en la declaración->
+
 
 void setTempHigh()
 {
@@ -982,7 +1165,9 @@ void showMonAmbiental()
     timer=0;
     updateMonAmbiental.Start();
 }
-
+/**
+ * @brief Enciende la alarma.
+*/
 void showMonEventos()
 {
     lcd.clear();

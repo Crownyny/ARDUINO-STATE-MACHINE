@@ -20,13 +20,13 @@
 #include "AsyncTaskLib.h" /** Manejo de tareas asíncronas */
 #include <EasyBuzzer.h> /** Control fácil de zumbadores */
 #include <LiquidMenu.h> /** Manejo de menús en pantallas LCD */
-#include <DHT.h> /** Sensores de temperatura y humedad */
+#include <DHT.h> /** Sensores de temperatura y humedad */ 
 #include <OneButton.h>/** Boton de estados*/
 
 
-#define ledR 9 /**Blocking*/
+#define ledR 7 /**Blocking*/
 #define ledG 8 /**Adorno*/
-#define ledB 7/**Alarma*/
+#define ledB 9/**Alarma*/
 
 #define buttonPin 13/**Boton de cambio de estados*/
 
@@ -97,12 +97,12 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS); // creat
  * @brief Tarea asincrona apagar el led color rojo.
  */
 AsyncTask TurnOffLedR(500, []()
-                     { pinMode(ledR, LOW); }); // Turn off the led after 500ms
+                     { digitalWrite(ledR, LOW); }); // Turn off the led after 500ms
 /*!
  * @brief Tarea asincrona apagar el led color azul.
  */
 AsyncTask TurnOffLedB(800, []()
-                    { pinMode(ledB,LOW);});
+                    { digitalWrite(ledB,LOW);});
 
 
 
@@ -114,9 +114,9 @@ bool flgCheckGasAlarm ;
 
 const char password[length] = "A1234B";
 char buffer[maxLength];
-int charCounter = 0;
-int failedAttempts = 0;
 int attemptsCounter = 0;
+int failedAttempts = 0;
+int charCount = 0;
 
 
 
@@ -261,7 +261,8 @@ enum Input
     TimeOut5 = 5,
     GasHigh = 6,
     TempLightHigh = 7,
-    Unknown = 8
+    TimeOut4 = 8,
+    Unknown = 9
 };
 
 // Create new StateMachine
@@ -270,7 +271,7 @@ enum Input
  * @param 6 estados.
  * @param 12 transiciones.
  */
-StateMachine stateMachine(6, 12);
+StateMachine stateMachine(6, 13);
 
 // Stores last user input
 Input input;
@@ -311,8 +312,8 @@ AsyncTask InactivityError(10000, true, []()
                       }
 
                         print2lines("Inactivity Error", "Try Again", 500);
-                      charCounter = 0;
                       attemptsCounter = 0;
+                      charCount = 0;
                       lcd.clear();
                       lcd.print("Input Password:");
                     });
@@ -347,6 +348,7 @@ AsyncTask updateMonAmbiental(1000,true, []()
 
     h = dht.readHumidity();
     t = dht.readTemperature();
+    g = analogRead(photocellPinGas);
 
     l = analogRead(photocellPin) / 4;
 
@@ -355,14 +357,14 @@ AsyncTask updateMonAmbiental(1000,true, []()
     lcd.print("    ");
     lcd.setCursor(4,0);
     lcd.cursor();
-    lcd.print((int)h);
+    lcd.print((int)t);
     
     lcd.setCursor(12,0);
     lcd.cursor();
     lcd.print("    ");
     lcd.setCursor(12,0);
     lcd.cursor();
-    lcd.print((int)t);
+    lcd.print((int)h);
     
     lcd.setCursor(4,1);
     lcd.cursor();
@@ -380,6 +382,30 @@ AsyncTask updateMonAmbiental(1000,true, []()
     * @brief Actualizar el buffer de luz.
     */
     lightBuffer[tempLightIndex] = l;
+    
+    gasBuffer[gasIndex] = g;
+
+    if(gasIndex+1 == intervals)
+    {
+        flgCheckGasAlarm = true;
+    }
+
+    gasIndex = (gasIndex + 1) % intervals;
+
+    int gasSum = 0;
+
+    for (int i = 0; i < intervals; i++) {
+        gasSum += gasBuffer[i];
+    }
+
+    float gasAvg = gasSum / intervals;
+
+    if (gasAvg >= gasHigh) {
+        flgCheckGasAlarm = false;
+        gasIndex = 0;
+        input = Input::GasHigh;
+        return;
+    }
 
     if(tempLightIndex+1 == intervals)
     {
@@ -388,7 +414,7 @@ AsyncTask updateMonAmbiental(1000,true, []()
     
     tempLightIndex = (tempLightIndex + 1) % intervals;
 
-    if(!flgCheckTLAlarm)
+    if(!flgCheckTLAlarm && !flgCheckGasAlarm)
     {
         return;
     }
@@ -424,7 +450,10 @@ AsyncTask updateMonEventos(1000, true, []()
         return;
     }
 
+    h = dht.readHumidity();
+    t = dht.readTemperature();
     g = analogRead(photocellPinGas);
+    l = analogRead(photocellPin) / 4;
 
     lcd.setCursor(4,0);
     lcd.cursor();
@@ -433,6 +462,16 @@ AsyncTask updateMonEventos(1000, true, []()
     lcd.cursor();
     lcd.print(g);
 
+     // Actualizar los buffers
+    /**
+    * @brief Actualizar el buffer de temperatura.
+    */
+    tempBuffer[tempLightIndex] = t;
+    /**
+    * @brief Actualizar el buffer de luz.
+    */
+    lightBuffer[tempLightIndex] = l;
+    
     gasBuffer[gasIndex] = g;
 
     if(gasIndex+1 == intervals)
@@ -441,11 +480,6 @@ AsyncTask updateMonEventos(1000, true, []()
     }
 
     gasIndex = (gasIndex + 1) % intervals;
-
-    if(!flgCheckGasAlarm)
-    {
-        return;
-    }
 
     int gasSum = 0;
 
@@ -461,8 +495,42 @@ AsyncTask updateMonEventos(1000, true, []()
         input = Input::GasHigh;
         return;
     }
+
+    if(tempLightIndex+1 == intervals)
+    {
+        flgCheckTLAlarm = true;
+    }
+    
+    tempLightIndex = (tempLightIndex + 1) % intervals;
+
+    if(!flgCheckTLAlarm && !flgCheckGasAlarm)
+    {
+        return;
+    }
+
+    // Calcular promedios
+    float tempSum = 0;
+    float lightSum = 0;
+
+    for (int i = 0; i < intervals; i++) {
+        tempSum += tempBuffer[i];
+        lightSum += lightBuffer[i];
+    }
+    float tempAvg = tempSum / intervals;
+    float lightAvg = lightSum / intervals;
+
+    if (tempAvg >= tempHigh && lightAvg >= lightHigh) {
+        tempLightIndex = 0;
+        flgCheckTLAlarm = false;
+        input = Input::TempLightHigh;
+        return;
+    }
 });
 
+AsyncTask TimeOutAlarm(4000, []()
+{
+  input = Input::TimeOut4;
+});
 // Setup the State Machine
 /**
  * @brief setupStateMachine inicializa los estados y las transiciones de los estados, de la maquina de estados.
@@ -499,6 +567,8 @@ void setupStateMachine()
 
     stateMachine.AddTransition(S_ALARMA, S_INICIO, []()
                                { return input == BtnPrs; });
+    stateMachine.AddTransition(S_ALARMA, S_MAMBIENTAL, []()
+                               { return input == TimeOut4; });
 
     // Add actions
     stateMachine.SetOnEntering(S_INICIO, outputA);
@@ -528,7 +598,8 @@ void setupStateMachine()
                                 updateMonAmbiental.Stop();});
     stateMachine.SetOnLeaving(S_ALARMA, []()
                               { Serial.println("Leaving F"); 
-                                EasyBuzzer.stopBeep();});
+                                EasyBuzzer.stopBeep();
+                                TimeOutAlarm.Stop();});
 }
 
 void setup()
@@ -537,9 +608,13 @@ void setup()
     Serial.begin(9600);
     dht.begin();
 
-    pinMode(ledR, LOW);
-    pinMode(ledG, LOW);
-    pinMode(ledB, LOW);
+    pinMode(ledR, OUTPUT);
+    pinMode(ledG, OUTPUT);
+    pinMode(ledB, OUTPUT);
+
+    digitalWrite(ledR, LOW);
+    digitalWrite(ledG, LOW);
+    digitalWrite(ledB, LOW);
 
     pinMode(buttonPin, INPUT);  // Button pin as an input.
 
@@ -616,6 +691,11 @@ void loop()
         BlockSequenceMsg.Update();
     }
 
+    if(TimeOutAlarm.IsActive())
+    {
+        TimeOutAlarm.Update();
+    }
+
     btn.tick();
 
     if (executeMenu)
@@ -640,15 +720,17 @@ void outputA()
     lcd.clear();
     lcd.print("Input Password:");
 
+    charCount=0;
+    attemptsCounter=0;
 
     while (security() && input != SystBlock)
     {
-        if(charCounter == 0)
+        if(attemptsCounter == 0)
         {
             InactivityError.Stop();
         }
 
-        if(charCounter == 1 && InactivityError.IsActive() == false)
+        if(attemptsCounter == 1 && InactivityError.IsActive() == false)
         {
           InactivityError.Start();
         }
@@ -713,12 +795,13 @@ void outputF()
     Serial.println("                    X");
     Serial.println();
 
-    pinMode(ledB, HIGH);
+    digitalWrite(ledB, HIGH);
     TurnOffLedB.Start();
     executeAlarm=true;
     EasyBuzzer.beep(15);
 
     print2lines("Alarm Activated", "Press Button", 100);
+    TimeOutAlarm.Start();
 }
 /**
  * @brief security valida que la contraseña sea correcta con 3 intentos para bloquearse .
@@ -726,7 +809,7 @@ void outputF()
 bool security()
 {
     // Configuramos lcd para cada loop
-    lcd.setCursor(attemptsCounter, 2);
+    lcd.setCursor(charCount, 2);
     char key = keypad.getKey();
     lcd.cursor();
 
@@ -738,17 +821,17 @@ bool security()
     InactivityError.Reset();
 
 
-    if (charCounter < maxLength-1 && key != '#')
+    if (attemptsCounter < maxLength-1 && key != '#')
     {
-        buffer[charCounter] = key;
+        buffer[attemptsCounter] = key;
         Serial.print(key);
         lcd.print("*");
-        charCounter++;
         attemptsCounter++;
+        charCount++;
         return true;
     }
 
-    buffer[charCounter] = '\0';
+    buffer[attemptsCounter] = '\0';
 
     if (strcmp(password, buffer) == 0)
     {
@@ -773,8 +856,8 @@ bool security()
     }
 
     print2lines("Access Denied", "Try Again", 500);
-    charCounter = 0;
     attemptsCounter = 0;
+    charCount = 0;
     lcd.clear();
     lcd.print("Input Password:");
     return true;
@@ -784,7 +867,7 @@ bool security()
  */
 void blocking()
 {
-    pinMode(ledR, HIGH); // Enciende el led y lo apaga despues de 500ms
+    digitalWrite(ledR, HIGH); // Enciende el led y lo apaga despues de 500ms
     TurnOffLedR.Start();
 
     EasyBuzzer.singleBeep(120, 10000);
@@ -802,8 +885,8 @@ void blocking()
     lcd.print("Seconds left");
 
     failedAttempts = 0;
-    charCounter = 0;
     attemptsCounter = 0;
+    charCount = 0;
 }
 
 
@@ -905,14 +988,17 @@ bool sensorLimitRepeatable(const int startNumber, const byte posStart, const int
     }
 
     // Check if the key is 0 and the position is the start position
-    if (key == '0' && (pos == posStart || (isNegative && pos == posStart + 1)))
+    if (key == '0' 
+        && (pos == posStart || (isNegative && pos == posStart + 1) 
+        || (isNegative && ((newValue * -10 ) < inferiorLimit)) 
+        || (!isNegative && ((newValue * 10)) > superiorLimit)))
     {
         return true;
     }
 
     if (key == '0')
     {
-        newValue = newValue * 10 + digit;
+        newValue = newValue * 10 ;
 
         lcd.setCursor(pos, 2);
         lcd.cursor();
@@ -1089,7 +1175,7 @@ void setLightLow()
 
 void setHumHigh()
 {
-    const byte posStart = 6;
+    const byte posStart = 7;
     const byte spaces = 3;
     printLineValue(spaces, "Hum High", posStart, humHigh);
     setSensorLimit(humHigh, posStart, humLow, 100);
@@ -1097,7 +1183,7 @@ void setHumHigh()
 
 void setHumLow()
 {
-    const byte posStart = 6;
+    const byte posStart = 7;
     const byte spaces = 3;
     printLineValue(spaces, "Hum Low", posStart, humLow);
     setSensorLimit(humLow, posStart, 0, humHigh);
@@ -1105,7 +1191,7 @@ void setHumLow()
 
 void setGasHigh()
 {
-    const byte posStart = 6;
+    const byte posStart = 8;
     const byte spaces = 3;
     printLineValue(spaces, "Gas High", posStart, gasHigh);
     setSensorLimit(gasHigh, posStart, gasLow, 2000);
@@ -1113,7 +1199,7 @@ void setGasHigh()
 
 void setGasLow()
 {
-    const byte posStart = 6;
+    const byte posStart = 8;
     const byte spaces = 3;
     printLineValue(spaces, "Gas Low", posStart, gasLow);
     setSensorLimit(gasLow, posStart, 0, gasHigh);
